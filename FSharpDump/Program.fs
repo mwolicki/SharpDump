@@ -8,8 +8,7 @@ module MiniWinDbg =
 
     type Type = {
         Name : string
-        Type : ClrType
-    }
+        Type : unit -> ClrType }
 
     type Object = {
         Id : UInt64
@@ -25,6 +24,20 @@ module MiniWinDbg =
     | BuildInStruct of obj
     | Struct of ValueType
     | String of String
+
+    type Val with
+        member self.Fields =
+            match self with
+            | Obj (Some o) -> o.Fields
+            | Obj None
+            | BuildInStruct _
+            | String _ -> fun () -> Map.empty
+            | Struct vt -> vt.Fields
+        member self.Val =
+            match self with
+            | BuildInStruct o -> Some o
+            | String s -> box s |> Some
+            | Obj _ | Struct _ -> None
 
     type Runtime = {
         Types : Type seq
@@ -66,7 +79,7 @@ module MiniWinDbg =
             { Type = toType t
               Fields = getFields t addr
               Size = uint64 size }
-        and toType t = { Type = t; Name = t.Name }
+        and toType t = { Type = (fun () -> t); Name = t.Name }
         and getObject (heap:ClrHeap) addr =
             let t = heap.GetObjectType addr
             if t = null then None
@@ -75,7 +88,6 @@ module MiniWinDbg =
                   Size = t.GetSize addr
                   Fields = getFields t addr
                   Id = addr } |> Some
-            
 
         let getObjects (runtimes : ClrRuntime array) = 
             runtimes |> Seq.collect (fun x-> let heap = x.GetHeap()
@@ -87,8 +99,8 @@ module MiniWinDbg =
 
         let runtimes = target.ClrVersions |> Seq.map (fun x-> x.CreateRuntime(getDac x)) |> Seq.toArray
 
-        let runtime ={
-            Types = runtimes |> Seq.collect (fun x->x.GetHeap().EnumerateTypes()) |> Seq.map (fun t-> { Name = t.Name; Type = t})
+        let runtime = {
+            Types = runtimes |> Seq.collect (fun x->x.GetHeap().EnumerateTypes()) |> Seq.map (fun t-> { Name = t.Name; Type = (fun () -> t)})
             Objects = runtimes |> getObjects }
 
 
@@ -106,7 +118,5 @@ objects |> Array.filter (fun x->x.Type.Name = "example.classA") |> Array.length 
 objects |> Array.filter (fun x->x.Type.Name = "example.classA[]") |> Array.length = 1 |> Debug.Assert
 
 let classA = objects |> Array.filter (fun x->x.Type.Name = "example.classA") |> Array.head
-let (MiniWinDbg.Struct p) = classA.Fields().["structA"]
-p.Fields().["b"]
-
+classA.Fields().["structA"].Fields()
 
