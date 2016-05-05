@@ -22,20 +22,7 @@ module MiniWinDbg =
         Size : UInt64 }
     and Val =
     | Obj of Object option
-    | Boolean of bool
-    | Char of char
-    | Float of float
-    | Float32 of float32
-    | Int8 of int8
-    | Int16 of int16
-    | Int32 of int32
-    | Int64 of int64
-    | UInt8 of uint8
-    | UInt16 of uint16
-    | UInt32 of uint32
-    | UInt64 of uint64
-    | NativeInt of nativeint
-    | UNativeInt of unativeint
+    | BuildInStruct of obj
     | Struct of ValueType
     | String of String
 
@@ -48,30 +35,30 @@ module MiniWinDbg =
 
         let rec getFields (t:ClrType) (addr:uint64) = 
             fun () -> t.Fields 
-                       |> Seq.map (fun x->x.Name, match x.ElementType with 
-
-                                                   | ClrElementType.Int64 -> x.GetValue addr :?> int64 |> Int64
-                                                   | ClrElementType.Boolean -> x.GetValue addr :?> bool |> Boolean
-                                                   | ClrElementType.Char -> x.GetValue addr :?> char |> Char
-                                                   | ClrElementType.Double -> x.GetValue addr :?> float32 |> Float32
-                                                   | ClrElementType.Float -> x.GetValue addr :?> float |> Float
-                                                   | ClrElementType.Int16 -> x.GetValue addr :?> int16 |> Int16
-                                                   | ClrElementType.Int32 -> x.GetValue addr :?> int32 |> Int32
-                                                   | ClrElementType.Int8 -> x.GetValue addr :?> int8 |> Int8
-                                                   | ClrElementType.UInt16 -> x.GetValue addr :?> uint16 |> UInt16
-                                                   | ClrElementType.UInt32 -> x.GetValue addr :?> uint32 |> UInt32
-                                                   | ClrElementType.UInt64 -> x.GetValue addr :?> uint64 |> UInt64
-                                                   | ClrElementType.UInt8 -> x.GetValue addr :?> uint8 |> UInt8
-                                                   | ClrElementType.NativeInt -> x.GetValue addr :?> nativeint |> NativeInt
-                                                   | ClrElementType.NativeUInt -> x.GetValue addr :?> unativeint |> UNativeInt
+                       |> Seq.map (fun x->x.Name, match x.ElementType with
+                                                   | ClrElementType.Int64
+                                                   | ClrElementType.Boolean
+                                                   | ClrElementType.Char
+                                                   | ClrElementType.Double
+                                                   | ClrElementType.Float
+                                                   | ClrElementType.Int16
+                                                   | ClrElementType.Int32
+                                                   | ClrElementType.Int8
+                                                   | ClrElementType.UInt16
+                                                   | ClrElementType.UInt32
+                                                   | ClrElementType.UInt64
+                                                   | ClrElementType.UInt8 
+                                                   | ClrElementType.NativeInt
+                                                   | ClrElementType.Pointer
+                                                   | ClrElementType.NativeUInt -> 
+                                                    x.GetValue addr |> BuildInStruct
                                                    | ClrElementType.Struct
-                                                   | ClrElementType.Pointer -> //TODO
+                                                    -> //TODO
                                                        getValueType x.Type x.Size addr |> Struct
                                                    | ClrElementType.String -> x.GetValue addr :?> string |> String
                                                    | ClrElementType.SZArray //TODO
                                                    | ClrElementType.Object ->
                                                        let addr = x.GetAddress(addr, t.IsValueClass)
-                                                       printfn " addr = %A" addr
                                                        getObject t.Heap addr |> Obj
                                                    | t -> sprintf "Unsupported type %O" t |> failwith)
                        |> Map.ofSeq
@@ -120,6 +107,6 @@ objects |> Array.filter (fun x->x.Type.Name = "example.classA[]") |> Array.lengt
 
 let classA = objects |> Array.filter (fun x->x.Type.Name = "example.classA") |> Array.head
 let (MiniWinDbg.Struct p) = classA.Fields().["structA"]
-p.Fields().["c"]
+p.Fields().["b"]
 
 
