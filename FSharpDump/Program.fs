@@ -106,7 +106,7 @@ module MiniWinDbg =
 
     let getRootObjects (heap:ClrHeap) =
         heap.EnumerateRoots() 
-        |> Seq.map (fun root -> getObject heap root.Address)
+        |> Seq.map (fun root -> getObject heap root.Object)
         |> Seq.choose id
 
     let openDumpFile (path: string) = 
