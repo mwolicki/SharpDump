@@ -30,12 +30,40 @@ module MiniWinDbg =
     | Array of Val option seq * Type * size:int
     | Lazy of (unit -> Val option)
 
+    [<Flags>]
+    type ThreadFlag =
+    | None                          = 0
+    | AbortRequested                = 1
+    | Aborted                       = 2
+    | Alive                         = 4
+    | Background                    = 8
+    | CoInitialized                 = 16
+    | DebugSuspended                = 32
+    | DebuggerHelper                = 64
+    | Finalizer                     = 128
+    | GC                            = 256
+    | GCSuspendPending              = 512
+    | MTA                           = 1024
+    | STA                           = 2048
+    | ShutdownHelper                = 4096
+    | SuspendingEE                  = 8192
+    | ThreadpoolCompletionPort      = 16384
+    | ThreadpoolGate                = 32768
+    | ThreadpoolTimer               = 65536
+    | ThreadpoolWait                = 131072
+    | ThreadpoolWorker              = 262144
+    | Unstarted                     = 524288
+    | UserSuspended                 = 1048576
+
     type Thread = {
         Stack : string list
         Id : uint32
         ManagedThreadId : int
-        ThreadObj:Object option
-        Name : string }
+        ThreadObj : Object option
+        //BlockingObjects
+        LockCount : uint32
+        Name : string
+        Flags : ThreadFlag }
 
     type Runtime = {
         Types : Type seq
@@ -159,6 +187,33 @@ module MiniWinDbg =
                 |> Seq.choose id
             runtimes |> Seq.collect (fun x -> getFinalizableQueue (x.GetHeap()))
 
+        let getThreadFlag (t: ClrThread) =
+            let (||||) (f:ThreadFlag) (b, flag:ThreadFlag) = 
+                if b then f ||| flag
+                else f
+            ThreadFlag.None
+            |||| (t.IsAbortRequested, ThreadFlag.AbortRequested)
+            |||| (t.IsAborted, ThreadFlag.Aborted)
+            |||| (t.IsAlive, ThreadFlag.Alive)
+            |||| (t.IsBackground, ThreadFlag.Background)
+            |||| (t.IsCoInitialized, ThreadFlag.CoInitialized)
+            |||| (t.IsDebugSuspended, ThreadFlag.DebugSuspended)
+            |||| (t.IsDebuggerHelper, ThreadFlag.DebuggerHelper)
+            |||| (t.IsFinalizer, ThreadFlag.Finalizer)
+            |||| (t.IsGC, ThreadFlag.GC)
+            |||| (t.IsGCSuspendPending, ThreadFlag.GCSuspendPending)
+            |||| (t.IsMTA, ThreadFlag.MTA)
+            |||| (t.IsSTA, ThreadFlag.STA)
+            |||| (t.IsShutdownHelper, ThreadFlag.ShutdownHelper)
+            |||| (t.IsSuspendingEE, ThreadFlag.SuspendingEE)
+            |||| (t.IsThreadpoolCompletionPort, ThreadFlag.ThreadpoolCompletionPort)
+            |||| (t.IsThreadpoolGate, ThreadFlag.ThreadpoolGate)
+            |||| (t.IsThreadpoolTimer, ThreadFlag.ThreadpoolTimer)
+            |||| (t.IsThreadpoolWait, ThreadFlag.ThreadpoolWait)
+            |||| (t.IsThreadpoolWorker, ThreadFlag.ThreadpoolWorker)
+            |||| (t.IsUnstarted, ThreadFlag.Unstarted)
+            |||| (t.IsUserSuspended, ThreadFlag.UserSuspended)
+
         let getThreads (runtimes : ClrRuntime array) =
             let getThreads (runtime: ClrRuntime) =
 
@@ -178,7 +233,8 @@ module MiniWinDbg =
                             | Str s -> s
                             | _ -> ""
                         | _ -> ""
-                    { ThreadObj = threadObj; Name = name; ManagedThreadId = t.ManagedThreadId; Stack = []; Id = t.OSThreadId})
+
+                    { ThreadObj = threadObj; LockCount = t.LockCount; Name = name; ManagedThreadId = t.ManagedThreadId; Stack = []; Id = t.OSThreadId; Flags = getThreadFlag t})
             runtimes 
             |> Seq.collect getThreads
 
@@ -227,11 +283,11 @@ runtime.GCRoots |> Seq.toArray
     * Delegates on stack
     * JIT information
     * Dead-lock detection
+    * BlockingObjects
     * etc
 *)
 
 let p =objects |> Array.filter (fun x->x.Type.Name.StartsWith "System.String[]") |> Array.head
 
 
-let t = runtime.Threads |> Seq.head
-
+let t = runtime.Threads |> Array.ofSeq
