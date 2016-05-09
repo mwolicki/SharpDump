@@ -26,6 +26,11 @@ module MiniWinDbg =
     | String of String
     | Lazy of (unit -> Val)
 
+    type Runtime = {
+        Types : Type seq
+        Objects : Object seq
+        GCRoots : Object seq }
+
     type Val with
         member self.Fields =
             match self with
@@ -41,12 +46,9 @@ module MiniWinDbg =
             | String s -> box s |> Some
             | Obj _ | Struct _ | Lazy _ -> None
 
-    type Runtime = {
-        Types : Type seq
-        Objects : Object seq }
-
     [<AutoOpen>]
     module private MiniWinDbg =
+        let objCache = System.Collections.Generic.Dictionary()
 
         let rec getFields (t:ClrType) (addr:uint64) = 
             t.Fields 
@@ -72,7 +74,10 @@ module MiniWinDbg =
                                        | ClrElementType.SZArray //TODO
                                        | ClrElementType.Object ->
                                            let addr = x.GetAddress(addr, t.IsValueClass)
-                                           Lazy (fun () -> getObject t.Heap addr |> Obj)
+                                           match objCache.TryGetValue addr with
+                                           | true, v -> v |> Some |> Obj
+                                           | false, _ ->
+                                                Lazy (fun () -> getObject t.Heap addr |> Obj)
                                        | t -> sprintf "Unsupported type %O" t |> failwith)
             |> Map.ofSeq
         and getValueType t size addr =
@@ -81,13 +86,19 @@ module MiniWinDbg =
               Size = uint64 size }
         and toType t = { Type = (fun () -> t); Name = t.Name }
         and getObject (heap:ClrHeap) addr =
-            let t = heap.GetObjectType addr
-            if t = null then None
-            else
-                { Type = toType t
-                  Size = t.GetSize addr
-                  Fields = getFields t addr
-                  Id = addr } |> Some
+            match objCache.TryGetValue addr with
+            | true, v -> Some v
+            | false, _ ->
+                let t = heap.GetObjectType addr
+                if t = null then None
+                else
+                    let o = 
+                        { Type = toType t
+                          Size = t.GetSize addr
+                          Fields = getFields t addr
+                          Id = addr } 
+                    objCache.Add (addr, o)
+                    o |> Some
 
         let getObjects (runtimes : ClrRuntime array) = 
             runtimes |> Seq.collect (fun x-> let heap = x.GetHeap()
@@ -100,13 +111,16 @@ module MiniWinDbg =
             let! path = target.SymbolLocator.FindBinaryAsync clrInfo.DacInfo |> Async.AwaitTask
             return path, clrInfo }
 
-        let runtimes = target.ClrVersions |> Seq.map getDac |> Async.Parallel |> Async.RunSynchronously
-            
-        let runtimes = runtimes |> Seq.map(fun (dac, x)-> x.CreateRuntime dac) |> Seq.toArray
+        let runtimes = target.ClrVersions 
+                        |> Seq.map getDac 
+                        |> Async.Parallel 
+                        |> Async.RunSynchronously
+                        |> Array.map(fun (dac, x)-> x.CreateRuntime dac) 
 
         let runtime = {
             Types = runtimes |> Seq.collect (fun x->x.GetHeap().EnumerateTypes()) |> Seq.map (fun t-> { Name = t.Name; Type = (fun () -> t)})
-            Objects = runtimes |> getObjects }
+            Objects = runtimes |> getObjects
+            GCRoots = Seq.empty }
 
         { new IDisposable with member __.Dispose() = target.Dispose() }, runtime 
 
@@ -121,8 +135,6 @@ objects |> Array.filter (fun x->x.Type.Name = "example.classA[]") |> Array.lengt
 
 let classA = objects |> Array.filter (fun x->x.Type.Name = "example.classA") |> Array.head
 
-classA.Fields.["structA"]
-|> fun structA -> structA.Fields.["c"]
-|> fun c -> c.Fields 
+classA.Fields.["structA"].Fields.["c"].Fields
 
 
