@@ -29,7 +29,8 @@ module MiniWinDbg =
 
     type Runtime = {
         Types : Type seq
-        Objects : Object seq }
+        Objects : Object seq
+        GCRoots: Object seq }
 
     type Val with
         member self.Fields =
@@ -103,6 +104,11 @@ module MiniWinDbg =
                                              heap.EnumerateObjectAddresses() |> Seq.map (getObject heap))
                      |> Seq.choose id
 
+    let getRootObjects (heap:ClrHeap) =
+        heap.EnumerateRoots() 
+        |> Seq.map (fun root -> getObject heap root.Address)
+        |> Seq.choose id
+
     let openDumpFile (path: string) = 
         let target = DataTarget.LoadCrashDump(path, CrashDumpReader.DbgEng)
         let getDac (clrInfo:ClrInfo) = async{
@@ -115,9 +121,10 @@ module MiniWinDbg =
                         |> Async.RunSynchronously
                         |> Array.map(fun (dac, x)-> x.CreateRuntime dac) 
 
-        let runtime = {
-            Types = runtimes |> Seq.collect (fun x->x.GetHeap().EnumerateTypes()) |> Seq.map (fun t-> { Name = t.Name; Type = (fun () -> t)})
-            Objects = runtimes |> getObjects }
+        let runtime =
+          { Types = runtimes |> Seq.collect (fun x->x.GetHeap().EnumerateTypes()) |> Seq.map (fun t-> { Name = t.Name; Type = (fun () -> t)})
+            Objects = runtimes |> getObjects
+            GCRoots = runtimes |> Seq.collect (fun x-> getRootObjects (x.GetHeap())) }
 
         { new IDisposable with member __.Dispose() = target.Dispose() }, runtime 
 
@@ -135,7 +142,7 @@ classA.RefersObjs()
 
 classA.Fields.["structA"].Fields.["c"].Fields
 
-
+runtime.GCRoots |> Seq.toArray
 (*
     * Add support for enums
     * Cancluate distance between 2 objects
