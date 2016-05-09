@@ -15,37 +15,52 @@ module MiniWinDbg =
         Type : Type
         Fields : Map<string, Val>
         Size : UInt64
-        RefersObjs : unit -> Object array }
+        RefersObjs : unit -> Val array }
     and ValueType = {
         Type : Type
         Fields : Map<string, Val>
         Size : UInt64 }
     and Val =
-    | Obj of Object option
+    | Obj of Object
     | SimpleVal of obj
     | Struct of ValueType
     | String of String
-    | Lazy of (unit -> Val)
+    | Lazy of (unit -> Val option)
 
     type Runtime = {
         Types : Type seq
-        Objects : Object seq
-        GCRoots: Object seq }
+        Objects : Val seq
+        GCRoots: Val seq }
 
     type Val with
         member self.Fields =
             match self with
-            | Obj (Some o) -> o.Fields
-            | Obj None
+            | Obj o -> o.Fields
             | SimpleVal _
             | String _ -> Map.empty
             | Struct vt -> vt.Fields
-            | Lazy v -> v().Fields
+            | Lazy v -> 
+                let v = v()
+                match v with
+                | Some s->s.Fields
+                | None -> Map.empty
         member self.Val =
             match self with
             | SimpleVal o -> Some o
             | String s -> box s |> Some
             | Obj _ | Struct _ | Lazy _ -> None
+
+        member self.Type =
+            match self with
+            | String o -> { Name = o.GetType().FullName; Type = fun () -> Unchecked.defaultof<ClrType>}
+            | SimpleVal o -> { Name = o.GetType().FullName; Type = fun () -> Unchecked.defaultof<ClrType>}
+            | Obj o -> o.Type
+            | Struct s -> s.Type
+            | Lazy v -> 
+                let v = v()
+                match v with
+                | Some s->s.Type
+                | None ->  { Name = "(unknown type)"; Type = fun () -> Unchecked.defaultof<ClrType>}
 
     [<AutoOpen>]
     module private MiniWinDbg =
@@ -67,13 +82,13 @@ module MiniWinDbg =
                                        | ClrElementType.NativeInt
                                        | ClrElementType.Pointer
                                        | ClrElementType.NativeUInt -> x.GetValue addr |> SimpleVal
-                                       | ClrElementType.Struct -> //TODO
+                                       | ClrElementType.Struct ->
                                            getValueType x.Type x.Size addr |> Struct
                                        | ClrElementType.String -> x.GetValue addr :?> string |> String
-                                       | ClrElementType.SZArray //TODO
+                                       | ClrElementType.SZArray
                                        | ClrElementType.Object ->
                                            let addr = x.GetAddress(addr, t.IsValueClass)
-                                           Lazy (fun () -> getObject t.Heap addr |> Obj)
+                                           Lazy (fun () -> getObject t.Heap addr)
                                        | t -> sprintf "Unsupported type %O" t |> failwith)
             |> Map.ofSeq
         and getValueType t size addr =
@@ -81,23 +96,26 @@ module MiniWinDbg =
               Fields = getFields t addr
               Size = uint64 size }
         and toType t = { Type = (fun () -> t); Name = t.Name }
-        and getObject (heap:ClrHeap) addr =
+        and getObject (heap:ClrHeap) addr : Val option =
                 let t = heap.GetObjectType addr
-                if t = null then None
+                if t = null then None 
                 else
-                    let refersObjs () = 
-                        let a = ResizeArray()
-                        let iter (addr:uint64) _ = 
-                            match getObject heap addr with
-                            | Some s-> s |> a.Add
-                            | None -> ()
-                        t.EnumerateRefsOfObjectCarefully (addr, Action<uint64, int>(iter))
-                        a.ToArray()
-                    { Type = toType t
-                      Size = t.GetSize addr
-                      Fields = getFields t addr
-                      Id = addr
-                      RefersObjs =  refersObjs} |> Some
+                    if t.IsString then
+                        t.GetValue addr :?> string |> (String >> Some)
+                    else
+                        let refersObjs () = 
+                            let a = ResizeArray()
+                            let iter (addr:uint64) _ = 
+                                match getObject heap addr with
+                                | Some s-> s |> a.Add
+                                | None -> ()
+                            t.EnumerateRefsOfObjectCarefully (addr, Action<uint64, int>(iter))
+                            a.ToArray()
+                        { Type = toType t
+                          Size = t.GetSize addr
+                          Fields = getFields t addr
+                          Id = addr
+                          RefersObjs =  refersObjs} |> (Obj >> Some)
 
         let getObjects (runtimes : ClrRuntime array) = 
             runtimes |> Seq.collect (fun x-> let heap = x.GetHeap()
@@ -138,13 +156,15 @@ objects |> Array.filter (fun x->x.Type.Name = "example.classA") |> Array.length 
 objects |> Array.filter (fun x->x.Type.Name = "example.classA[]") |> Array.length = 1 |> Debug.Assert
 
 let classA = objects |> Array.filter (fun x->x.Type.Name = "example.classA") |> Array.head
-classA.RefersObjs()
 
 classA.Fields.["structA"].Fields.["c"].Fields
 
 runtime.GCRoots |> Seq.toArray
 (*
     * Add support for enums
+    * arrays
     * Cancluate distance between 2 objects
     * etc
 *)
+
+objects |> Array.filter (fun x->x.Type.Name = "System.String")
