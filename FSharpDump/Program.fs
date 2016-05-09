@@ -26,7 +26,7 @@ module MiniWinDbg =
     | Obj of Object
     | SimpleVal of obj
     | Struct of ValueType
-    | String of String
+    | Str of String
     | Array of Val option seq * Type * size:int
     | Lazy of (unit -> Val option)
 
@@ -34,7 +34,8 @@ module MiniWinDbg =
         Stack : string list
         Id : uint32
         ManagedThreadId : int
-        ThreadObj:Object option }
+        ThreadObj:Object option
+        Name : string }
 
     type Runtime = {
         Types : Type seq
@@ -51,7 +52,7 @@ module MiniWinDbg =
             | Obj o -> o.Fields
             | SimpleVal _
             | Array _
-            | String _ -> Map.empty
+            | Str _ -> Map.empty
             | Struct vt -> vt.Fields
             | Lazy v -> 
                 let v = v()
@@ -61,12 +62,12 @@ module MiniWinDbg =
         member self.Val =
             match self with
             | SimpleVal o -> Some o
-            | String s -> box s |> Some
+            | Str s -> box s |> Some
             | Obj _ | Struct _ | Lazy _ | Array _ -> None
 
         member self.Type =
             match self with
-            | String o -> { Name = o.GetType().FullName; Type = fun () -> Unchecked.defaultof<ClrType>}
+            | Str o -> { Name = o.GetType().FullName; Type = fun () -> Unchecked.defaultof<ClrType>}
             | SimpleVal o -> { Name = o.GetType().FullName; Type = fun () -> Unchecked.defaultof<ClrType>}
             | Obj o -> o.Type
             | Struct s -> s.Type
@@ -99,7 +100,7 @@ module MiniWinDbg =
                                        | ClrElementType.NativeUInt -> x.GetValue addr |> SimpleVal
                                        | ClrElementType.Struct ->
                                            getValueType x.Type x.Size addr |> Struct
-                                       | ClrElementType.String -> x.GetValue addr :?> string |> String
+                                       | ClrElementType.String -> x.GetValue addr :?> string |> Str
                                        | ClrElementType.SZArray
                                        | ClrElementType.Object ->
                                            let addr = x.GetAddress(addr, t.IsValueClass)
@@ -116,7 +117,7 @@ module MiniWinDbg =
                 if t = null then None 
                 else
                     if t.IsString then
-                        t.GetValue addr :?> string |> (String >> Some)
+                        t.GetValue addr :?> string |> (Str >> Some)
                     elif t.IsArray then
                         let len = t.GetArrayLength addr
                         seq { for i = 0 to len do
@@ -160,17 +161,24 @@ module MiniWinDbg =
 
         let getThreads (runtimes : ClrRuntime array) =
             let getThreads (runtime: ClrRuntime) =
-                let heap = runtime.GetHeap()
 
                 let threadObj (id:int) = 
                     getObjects runtimes 
                     |> Seq.filter(fun x->x.Type.Name = "System.Threading.Thread")
                     |> Seq.choose (function Obj o -> Some o | _ -> None)
-                    |> Seq.tryFind(fun x->(unbox x.Fields.["m_ManagedThreadId"].Val) = id)
-
+                    |> Seq.tryFind(fun x->(unbox x.Fields.["m_ManagedThreadId"].Val.Value) = id)
 
                 runtime.Threads 
-                |> Seq.map (fun t-> { ThreadObj = threadObj t.ManagedThreadId; ManagedThreadId = t.ManagedThreadId; Stack = []; Id = t.OSThreadId})
+                |> Seq.map (fun t-> 
+                    let threadObj = threadObj t.ManagedThreadId
+                    let name = 
+                        match threadObj with 
+                        | Some o ->
+                            match o.Fields.["m_Name"]  with
+                            | Str s -> s
+                            | _ -> ""
+                        | _ -> ""
+                    { ThreadObj = threadObj; Name = name; ManagedThreadId = t.ManagedThreadId; Stack = []; Id = t.OSThreadId})
             runtimes 
             |> Seq.collect getThreads
 
@@ -216,12 +224,14 @@ runtime.GCRoots |> Seq.toArray
     * Cancluate distance between 2 objects
     * stacks
     * EnumerateBlockingObjects
+    * Delegates on stack
+    * JIT information
+    * Dead-lock detection
     * etc
 *)
 
 let p =objects |> Array.filter (fun x->x.Type.Name.StartsWith "System.String[]") |> Array.head
 
 
-let thr = p.Type.Type().Heap.EnumerateTypes() |> Seq.filter(fun x->x.Name = "System.Threading.Thread") |> Seq.head
+let t = runtime.Threads |> Seq.head
 
-let t = runtime.Threads
