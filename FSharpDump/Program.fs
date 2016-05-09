@@ -30,12 +30,20 @@ module MiniWinDbg =
     | Array of Val option seq * Type * size:int
     | Lazy of (unit -> Val option)
 
+    type Thread = {
+        Stack : string list
+        Id : uint32
+        ManagedThreadId : int
+        ThreadObj:Object option }
+
     type Runtime = {
         Types : Type seq
         Objects : Val seq
         GCRoots: Val seq
         ///Objects which have been collected, but are awaiting for Finalizer
-        FinalizableQueue : Val seq }
+        FinalizableQueue : Val seq
+        Threads : Thread seq }
+
 
     type Val with
         member self.Fields =
@@ -150,6 +158,22 @@ module MiniWinDbg =
                 |> Seq.choose id
             runtimes |> Seq.collect (fun x -> getFinalizableQueue (x.GetHeap()))
 
+        let getThreads (runtimes : ClrRuntime array) =
+            let getThreads (runtime: ClrRuntime) =
+                let heap = runtime.GetHeap()
+
+                let threadObj (id:int) = 
+                    getObjects runtimes 
+                    |> Seq.filter(fun x->x.Type.Name = "System.Threading.Thread")
+                    |> Seq.choose (function Obj o -> Some o | _ -> None)
+                    |> Seq.tryFind(fun x->(unbox x.Fields.["m_ManagedThreadId"].Val) = id)
+
+
+                runtime.Threads 
+                |> Seq.map (fun t-> { ThreadObj = threadObj t.ManagedThreadId; ManagedThreadId = t.ManagedThreadId; Stack = []; Id = t.OSThreadId})
+            runtimes 
+            |> Seq.collect getThreads
+
 
     let openDumpFile (path: string) = 
         let target = DataTarget.LoadCrashDump(path, CrashDumpReader.DbgEng)
@@ -162,12 +186,13 @@ module MiniWinDbg =
                         |> Async.Parallel 
                         |> Async.RunSynchronously
                         |> Array.map(fun (dac, x)-> x.CreateRuntime dac) 
-        
+
         let runtime =
           { Types = runtimes |> Seq.collect (fun x->x.GetHeap().EnumerateTypes()) |> Seq.map (fun t-> { Name = t.Name; Type = (fun () -> t)})
             Objects = runtimes |> getObjects
             GCRoots = runtimes |> getRootObjects
-            FinalizableQueue = runtimes |> getFinalizableQueue }
+            FinalizableQueue = runtimes |> getFinalizableQueue
+            Threads = runtimes |> getThreads }
 
         { new IDisposable with member __.Dispose() = target.Dispose() }, runtime 
 
@@ -195,4 +220,8 @@ runtime.GCRoots |> Seq.toArray
 *)
 
 let p =objects |> Array.filter (fun x->x.Type.Name.StartsWith "System.String[]") |> Array.head
-p
+
+
+let thr = p.Type.Type().Heap.EnumerateTypes() |> Seq.filter(fun x->x.Name = "System.Threading.Thread") |> Seq.head
+
+let t = runtime.Threads
