@@ -14,7 +14,8 @@ module MiniWinDbg =
         Id : UInt64
         Type : Type
         Fields : Map<string, Val>
-        Size : UInt64 }
+        Size : UInt64
+        RefersObjs : unit -> Object array }
     and ValueType = {
         Type : Type
         Fields : Map<string, Val>
@@ -28,8 +29,7 @@ module MiniWinDbg =
 
     type Runtime = {
         Types : Type seq
-        Objects : Object seq
-        GCRoots : Object seq }
+        Objects : Object seq }
 
     type Val with
         member self.Fields =
@@ -48,8 +48,6 @@ module MiniWinDbg =
 
     [<AutoOpen>]
     module private MiniWinDbg =
-        let objCache = System.Collections.Generic.Dictionary()
-
         let rec getFields (t:ClrType) (addr:uint64) = 
             t.Fields 
             |> Seq.map (fun x->x.Name, match x.ElementType with
@@ -74,10 +72,7 @@ module MiniWinDbg =
                                        | ClrElementType.SZArray //TODO
                                        | ClrElementType.Object ->
                                            let addr = x.GetAddress(addr, t.IsValueClass)
-                                           match objCache.TryGetValue addr with
-                                           | true, v -> v |> Some |> Obj
-                                           | false, _ ->
-                                                Lazy (fun () -> getObject t.Heap addr |> Obj)
+                                           Lazy (fun () -> getObject t.Heap addr |> Obj)
                                        | t -> sprintf "Unsupported type %O" t |> failwith)
             |> Map.ofSeq
         and getValueType t size addr =
@@ -86,19 +81,22 @@ module MiniWinDbg =
               Size = uint64 size }
         and toType t = { Type = (fun () -> t); Name = t.Name }
         and getObject (heap:ClrHeap) addr =
-            match objCache.TryGetValue addr with
-            | true, v -> Some v
-            | false, _ ->
                 let t = heap.GetObjectType addr
                 if t = null then None
                 else
-                    let o = 
-                        { Type = toType t
-                          Size = t.GetSize addr
-                          Fields = getFields t addr
-                          Id = addr } 
-                    objCache.Add (addr, o)
-                    o |> Some
+                    let refersObjs () = 
+                        let a = ResizeArray()
+                        let iter (addr:uint64) _ = 
+                            match getObject heap addr with
+                            | Some s-> s |> a.Add
+                            | None -> ()
+                        t.EnumerateRefsOfObjectCarefully (addr, Action<uint64, int>(iter))
+                        a.ToArray()
+                    { Type = toType t
+                      Size = t.GetSize addr
+                      Fields = getFields t addr
+                      Id = addr
+                      RefersObjs =  refersObjs} |> Some
 
         let getObjects (runtimes : ClrRuntime array) = 
             runtimes |> Seq.collect (fun x-> let heap = x.GetHeap()
@@ -119,22 +117,27 @@ module MiniWinDbg =
 
         let runtime = {
             Types = runtimes |> Seq.collect (fun x->x.GetHeap().EnumerateTypes()) |> Seq.map (fun t-> { Name = t.Name; Type = (fun () -> t)})
-            Objects = runtimes |> getObjects
-            GCRoots = Seq.empty }
+            Objects = runtimes |> getObjects }
 
         { new IDisposable with member __.Dispose() = target.Dispose() }, runtime 
 
-let d, runtimes = MiniWinDbg.openDumpFile @"C:\tmp\example.dmp"
+let d, runtime = MiniWinDbg.openDumpFile @"C:\tmp\example.dmp"
 
 open System.Diagnostics
 
-let objects = runtimes.Objects |> Array.ofSeq
+let objects = runtime.Objects |> Array.ofSeq
 
 objects |> Array.filter (fun x->x.Type.Name = "example.classA") |> Array.length = 10 |> Debug.Assert
 objects |> Array.filter (fun x->x.Type.Name = "example.classA[]") |> Array.length = 1 |> Debug.Assert
 
 let classA = objects |> Array.filter (fun x->x.Type.Name = "example.classA") |> Array.head
+classA.RefersObjs()
 
 classA.Fields.["structA"].Fields.["c"].Fields
 
 
+(*
+    * Add support for enums
+    * Cancluate distance between 2 objects
+    * etc
+*)
