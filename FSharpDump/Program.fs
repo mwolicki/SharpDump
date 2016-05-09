@@ -25,6 +25,7 @@ module MiniWinDbg =
     | SimpleVal of obj
     | Struct of ValueType
     | String of String
+    | Array of Val option seq * Type * size:int
     | Lazy of (unit -> Val option)
 
     type Runtime = {
@@ -37,6 +38,7 @@ module MiniWinDbg =
             match self with
             | Obj o -> o.Fields
             | SimpleVal _
+            | Array _
             | String _ -> Map.empty
             | Struct vt -> vt.Fields
             | Lazy v -> 
@@ -48,7 +50,7 @@ module MiniWinDbg =
             match self with
             | SimpleVal o -> Some o
             | String s -> box s |> Some
-            | Obj _ | Struct _ | Lazy _ -> None
+            | Obj _ | Struct _ | Lazy _ | Array _ -> None
 
         member self.Type =
             match self with
@@ -56,6 +58,7 @@ module MiniWinDbg =
             | SimpleVal o -> { Name = o.GetType().FullName; Type = fun () -> Unchecked.defaultof<ClrType>}
             | Obj o -> o.Type
             | Struct s -> s.Type
+            | Array (_, t, _) -> t
             | Lazy v -> 
                 let v = v()
                 match v with
@@ -102,6 +105,12 @@ module MiniWinDbg =
                 else
                     if t.IsString then
                         t.GetValue addr :?> string |> (String >> Some)
+                    elif t.IsArray then
+                        let len = t.GetArrayLength addr
+                        seq { for i = 0 to len do
+                                yield t.GetArrayElementAddress(addr, i) |> getObject heap }
+                        |> fun el ->  Array (el, toType t, len)
+                        |> Some
                     else
                         let refersObjs () = 
                             let a = ResizeArray()
@@ -167,4 +176,5 @@ runtime.GCRoots |> Seq.toArray
     * etc
 *)
 
-objects |> Array.filter (fun x->x.Type.Name = "System.String")
+let p =objects |> Array.filter (fun x->x.Type.Name.StartsWith "System.String[]") |> Array.head
+p
