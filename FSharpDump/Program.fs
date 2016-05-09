@@ -16,10 +16,12 @@ module MiniWinDbg =
         Fields : Map<string, Val>
         Size : UInt64
         RefersObjs : unit -> Val array }
+
     and ValueType = {
         Type : Type
         Fields : Map<string, Val>
         Size : UInt64 }
+
     and Val =
     | Obj of Object
     | SimpleVal of obj
@@ -31,7 +33,9 @@ module MiniWinDbg =
     type Runtime = {
         Types : Type seq
         Objects : Val seq
-        GCRoots: Val seq }
+        GCRoots: Val seq
+        ///Objects which have been collected, but are awaiting for Finalizer
+        FinalizableQueue : Val seq }
 
     type Val with
         member self.Fields =
@@ -131,10 +135,21 @@ module MiniWinDbg =
                                              heap.EnumerateObjectAddresses() |> Seq.map (getObject heap))
                      |> Seq.choose id
 
-    let getRootObjects (heap:ClrHeap) =
-        heap.EnumerateRoots() 
-        |> Seq.map (fun root -> getObject heap root.Object)
-        |> Seq.choose id
+
+        let getRootObjects (runtimes : ClrRuntime array)  =
+            let getRootObjects (heap:ClrHeap) =
+                heap.EnumerateRoots() 
+                |> Seq.map (fun root -> getObject heap root.Object)
+                |> Seq.choose id
+            runtimes |> Seq.collect (fun x -> getRootObjects (x.GetHeap()))
+
+        let getFinalizableQueue (runtimes : ClrRuntime array) =
+            let getFinalizableQueue (heap:ClrHeap) =
+                heap.EnumerateFinalizableObjectAddresses() 
+                |> Seq.map (getObject heap)
+                |> Seq.choose id
+            runtimes |> Seq.collect (fun x -> getFinalizableQueue (x.GetHeap()))
+
 
     let openDumpFile (path: string) = 
         let target = DataTarget.LoadCrashDump(path, CrashDumpReader.DbgEng)
@@ -147,11 +162,12 @@ module MiniWinDbg =
                         |> Async.Parallel 
                         |> Async.RunSynchronously
                         |> Array.map(fun (dac, x)-> x.CreateRuntime dac) 
-
+        
         let runtime =
           { Types = runtimes |> Seq.collect (fun x->x.GetHeap().EnumerateTypes()) |> Seq.map (fun t-> { Name = t.Name; Type = (fun () -> t)})
             Objects = runtimes |> getObjects
-            GCRoots = runtimes |> Seq.collect (fun x-> getRootObjects (x.GetHeap())) }
+            GCRoots = runtimes |> getRootObjects
+            FinalizableQueue = runtimes |> getFinalizableQueue }
 
         { new IDisposable with member __.Dispose() = target.Dispose() }, runtime 
 
@@ -173,6 +189,8 @@ runtime.GCRoots |> Seq.toArray
     * Add support for enums
     * arrays
     * Cancluate distance between 2 objects
+    * stacks
+    * EnumerateBlockingObjects
     * etc
 *)
 
