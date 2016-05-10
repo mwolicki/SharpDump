@@ -6,30 +6,55 @@ module MiniWinDbg =
     open System
     open Microsoft.Diagnostics.Runtime
 
-    type Type = {
-        Name : string
-        Type : unit -> ClrType } with
-        override t.ToString() = t.Name
+    type ObjectRef = UInt64
 
-    type Object = {
-        Id : UInt64
-        Type : Type
-        Fields : Map<string, Val>
-        Size : UInt64
-        RefersObjs : unit -> Val array }
+    type Type =
+        struct
+            val ClrType : ClrType
+            val private _fields : ClrType -> ObjectRef -> Map<string, unit -> Val>
+            member t.Fields = t._fields t.ClrType
+            member t.Name = t.ClrType.Name
+            override t.ToString() = t.Name
+            new (clrType, fields) = { ClrType = clrType; _fields = fields }
+        end
+    and Object = 
+        struct
+            val Id : ObjectRef 
+            val Type : Type
+            member o.Size = o.Type.ClrType.GetSize o.Id
+            member o.Fields with get () = o.Type.Fields o.Id
 
-    and ValueType = {
-        Type : Type
-        Fields : Map<string, Val>
-        Size : UInt64 }
+            override o.ToString() = sprintf "{ Id = %i; Type = %s}" o.Id o.Type.Name
 
+            new (id, type') = {Id = id; Type = type'}
+        end
+    
+    and ValueType = 
+        struct
+            val Id : ObjectRef 
+            val Type : Type
+            val Size : Int32
+            member o.Fields with get () = o.Type.Fields o.Id
+            override o.ToString() = sprintf "{ Id = %i; Type = %s; Size = %i}" o.Id o.Type.Name o.Size
+
+            new (id, type', size) = {Id = id; Type = type'; Size = size}
+        end
+    and Arr = 
+        struct
+            val Elements : Val seq 
+            val Type : Type
+            val Size : Int32
+            override o.ToString() = sprintf "{ Elements = %A; Type = %s; Size = %i}" o.Elements o.Type.Name o.Size
+
+            new (elements, type', size) = {Elements = elements; Type = type'; Size = size}
+        end
     and Val =
     | Obj of Object
     | SimpleVal of obj
     | Struct of ValueType
     | Str of String
-    | Array of Val option seq * Type * size:int
-    | Lazy of (unit -> Val option)
+    | Array of Arr
+    | Null
 
     [<Flags>]
     type ThreadFlag =
@@ -78,114 +103,98 @@ module MiniWinDbg =
     type Val with
         member self.Fields =
             match self with
-            | Obj o -> o.Fields
+            | Obj o ->  o.Fields
             | SimpleVal _
             | Array _
             | Str _ -> Map.empty
+            | Null -> Map.empty
             | Struct vt -> vt.Fields
-            | Lazy v -> 
-                let v = v()
-                match v with
-                | Some s->s.Fields
-                | None -> Map.empty
+
         member self.Val =
             match self with
             | SimpleVal o -> Some o
             | Str s -> box s |> Some
-            | Obj _ | Struct _ | Lazy _ | Array _ -> None
-
+            | Obj _ | Struct _ | Array _ | Null -> None
+            (*
         member self.Type =
             match self with
-            | Str o -> { Name = o.GetType().FullName; Type = fun () -> Unchecked.defaultof<ClrType>}
-            | SimpleVal o -> { Name = o.GetType().FullName; Type = fun () -> Unchecked.defaultof<ClrType>}
+            | Str o -> Type(ClrType(), fun _ -> Map.empty)
+            | SimpleVal o -> Type()
             | Obj o -> o.Type
+            | Null -> Type()
             | Struct s -> s.Type
-            | Array (_, t, _) -> t
-            | Lazy v -> 
-                let v = v()
-                match v with
-                | Some s->s.Type
-                | None ->  { Name = "(unknown type)"; Type = fun () -> Unchecked.defaultof<ClrType>}
+            | Array (_, t, _) -> t*)
 
     [<AutoOpen>]
     module private MiniWinDbg =
         let rec getFields (t:ClrType) (addr:uint64) = 
             t.Fields 
-            |> Seq.map (fun x->x.Name, match x.ElementType with
-                                       | ClrElementType.Int64
-                                       | ClrElementType.Boolean
-                                       | ClrElementType.Char
-                                       | ClrElementType.Double
-                                       | ClrElementType.Float
-                                       | ClrElementType.Int16
-                                       | ClrElementType.Int32
-                                       | ClrElementType.Int8
-                                       | ClrElementType.UInt16
-                                       | ClrElementType.UInt32
-                                       | ClrElementType.UInt64
-                                       | ClrElementType.UInt8 
-                                       | ClrElementType.NativeInt
-                                       | ClrElementType.Pointer
-                                       | ClrElementType.NativeUInt -> x.GetValue addr |> SimpleVal
-                                       | ClrElementType.Struct ->
-                                           getValueType x.Type x.Size addr |> Struct
-                                       | ClrElementType.String -> x.GetValue addr :?> string |> Str
-                                       | ClrElementType.SZArray
-                                       | ClrElementType.Object ->
-                                           let addr = x.GetAddress(addr, t.IsValueClass)
-                                           Lazy (fun () -> getObject t.Heap addr)
-                                       | t -> sprintf "Unsupported type %O" t |> failwith)
+            |> Seq.map (fun x->x.Name, 
+                               fun () -> match x.ElementType with
+                                         | ClrElementType.Int64
+                                         | ClrElementType.Boolean
+                                         | ClrElementType.Char
+                                         | ClrElementType.Double
+                                         | ClrElementType.Float
+                                         | ClrElementType.Int16
+                                         | ClrElementType.Int32
+                                         | ClrElementType.Int8
+                                         | ClrElementType.UInt16
+                                         | ClrElementType.UInt32
+                                         | ClrElementType.UInt64
+                                         | ClrElementType.UInt8 
+                                         | ClrElementType.NativeInt
+                                         | ClrElementType.Pointer
+                                         | ClrElementType.NativeUInt -> x.GetValue addr |> SimpleVal
+                                         | ClrElementType.Struct ->
+                                             getValueType x.Type x.Size addr |> Struct
+                                         | ClrElementType.String -> x.GetValue addr :?> string |> Str
+                                         | ClrElementType.SZArray
+                                         | ClrElementType.Object ->
+                                             x.GetAddress(addr, t.IsValueClass)
+                                             |> getObject t.Heap
+                                         | t -> sprintf "Unsupported type %O" t |> failwith)
             |> Map.ofSeq
+        and getFieldsCached = 
+            () //force cache
+            getFields
         and getValueType t size addr =
-            { Type = toType t
-              Fields = getFields t addr
-              Size = uint64 size }
-        and toType t = { Type = (fun () -> t); Name = t.Name }
-        and getObject (heap:ClrHeap) addr : Val option =
+            ValueType(addr, Type(t, getFieldsCached), size)
+        and getObject (heap:ClrHeap) addr : Val =
                 let t = heap.GetObjectType addr
-                if t = null then None 
+                if t = null then Null 
                 else
                     if t.IsString then
-                        t.GetValue addr :?> string |> (Str >> Some)
+                        t.GetValue addr :?> string |> Str
                     elif t.IsArray then
                         let len = t.GetArrayLength addr
-                        seq { for i = 0 to len do
-                                yield t.GetArrayElementAddress(addr, i) |> getObject heap }
-                        |> fun el ->  Array (el, toType t, len)
-                        |> Some
+                        let elements =
+                            seq { for i = 0 to len do
+                                  yield t.GetArrayElementAddress(addr, i) |> getObject heap }
+                        Arr (elements, Type (t, getFieldsCached), len) |> Array
                     else
                         let refersObjs () = 
                             let a = ResizeArray()
-                            let iter (addr:uint64) _ = 
-                                match getObject heap addr with
-                                | Some s-> s |> a.Add
-                                | None -> ()
+                            let iter (addr:uint64) _ = getObject heap addr |> a.Add
                             t.EnumerateRefsOfObjectCarefully (addr, Action<uint64, int>(iter))
                             a.ToArray()
-                        { Type = toType t
-                          Size = t.GetSize addr
-                          Fields = getFields t addr
-                          Id = addr
-                          RefersObjs =  refersObjs} |> (Obj >> Some)
+                        Object(addr, Type(t, getFieldsCached)) |> Obj
 
         let getObjects (runtimes : ClrRuntime array) = 
             runtimes |> Seq.collect (fun x-> let heap = x.GetHeap()
                                              heap.EnumerateObjectAddresses() |> Seq.map (getObject heap))
-                     |> Seq.choose id
 
 
         let getRootObjects (runtimes : ClrRuntime array)  =
             let getRootObjects (heap:ClrHeap) =
                 heap.EnumerateRoots() 
                 |> Seq.map (fun root -> getObject heap root.Object)
-                |> Seq.choose id
             runtimes |> Seq.collect (fun x -> getRootObjects (x.GetHeap()))
 
         let getFinalizableQueue (runtimes : ClrRuntime array) =
             let getFinalizableQueue (heap:ClrHeap) =
                 heap.EnumerateFinalizableObjectAddresses() 
                 |> Seq.map (getObject heap)
-                |> Seq.choose id
             runtimes |> Seq.collect (fun x -> getFinalizableQueue (x.GetHeap()))
 
         let getThreadFlag (t: ClrThread) =
@@ -220,9 +229,9 @@ module MiniWinDbg =
 
                 let threadObj (id:int) = 
                     getObjects runtimes 
-                    |> Seq.filter(fun x->x.Type.Name = "System.Threading.Thread")
                     |> Seq.choose (function Obj o -> Some o | _ -> None)
-                    |> Seq.tryFind(fun x->(unbox x.Fields.["m_ManagedThreadId"].Val.Value) = id)
+                    |> Seq.filter(fun x->x.Type.Name = "System.Threading.Thread")
+                    |> Seq.tryFind(fun x->(unbox x.Fields.["m_ManagedThreadId"]()) = id)
 
                 runtime.Threads 
                 |> Seq.map (fun t-> 
@@ -230,7 +239,7 @@ module MiniWinDbg =
                     let name = 
                         match threadObj with 
                         | Some o ->
-                            match o.Fields.["m_Name"]  with
+                            match o.Fields.["m_Name"]()  with
                             | Str s -> s
                             | _ -> ""
                         | _ -> ""
@@ -251,7 +260,7 @@ module MiniWinDbg =
                             |> Array.map(fun (dac, x)-> x.CreateRuntime dac) 
 
             let runtime =
-              { Types = runtimes |> Seq.collect (fun x->x.GetHeap().EnumerateTypes()) |> Seq.map (fun t-> { Name = t.Name; Type = (fun () -> t)})
+              { Types = runtimes |> Seq.collect (fun x->x.GetHeap().EnumerateTypes()) |> Seq.map (fun t -> Type(t, getFieldsCached))
                 Objects = runtimes |> getObjects
                 GCRoots = runtimes |> getRootObjects
                 FinalizableQueue = runtimes |> getFinalizableQueue
@@ -263,10 +272,24 @@ module MiniWinDbg =
 
     let attach pid = DataTarget.AttachToProcess(pid, 30000u, AttachFlag.Invasive) |> getRuntime
 
+module Seq =
+    open System.Collections.Generic
+    let toDict (getKey) (sequence) =
+        let types = Dictionary()
+        for el in sequence do
+            let key = getKey el
+            match types.TryGetValue key with
+            | false,_ -> types.Add(key, ResizeArray [el])
+            | true, s -> s.Add el
+        types
 
 let d, runtime = MiniWinDbg.openDumpFile @"C:\tmp\example-medium.dmp"
 
-let types = runtime.Objects |> Seq.map (fun x->x.Type.Name, x) |> Map.ofSeq
+
+
+
+let types = runtime.Objects |> Seq.toArray
+
 (*
 open System.Diagnostics
 
@@ -299,3 +322,4 @@ let p =objects |> Array.filter (fun x->x.Type.Name.StartsWith "System.String[]")
 
 
 let t = runtime.Threads |> Array.ofSeq*)
+
