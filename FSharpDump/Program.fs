@@ -1,5 +1,6 @@
 ﻿#if INTERACTIVE
 #r @"..\packages\Microsoft.Diagnostics.Runtime.0.8.31-beta\lib\net40\Microsoft.Diagnostics.Runtime.dll"
+#time "on"
 #endif
 module MiniWinDbg =
     open System
@@ -238,30 +239,35 @@ module MiniWinDbg =
             runtimes 
             |> Seq.collect getThreads
 
+        let getRuntime (target:DataTarget) = 
+            let getDac (clrInfo:ClrInfo) = async{
+                let! path = target.SymbolLocator.FindBinaryAsync clrInfo.DacInfo |> Async.AwaitTask
+                return path, clrInfo }
 
-    let openDumpFile (path: string) = 
-        let target = DataTarget.LoadCrashDump(path, CrashDumpReader.DbgEng)
-        let getDac (clrInfo:ClrInfo) = async{
-            let! path = target.SymbolLocator.FindBinaryAsync clrInfo.DacInfo |> Async.AwaitTask
-            return path, clrInfo }
+            let runtimes = target.ClrVersions 
+                            |> Seq.map getDac 
+                            |> Async.Parallel 
+                            |> Async.RunSynchronously
+                            |> Array.map(fun (dac, x)-> x.CreateRuntime dac) 
 
-        let runtimes = target.ClrVersions 
-                        |> Seq.map getDac 
-                        |> Async.Parallel 
-                        |> Async.RunSynchronously
-                        |> Array.map(fun (dac, x)-> x.CreateRuntime dac) 
+            let runtime =
+              { Types = runtimes |> Seq.collect (fun x->x.GetHeap().EnumerateTypes()) |> Seq.map (fun t-> { Name = t.Name; Type = (fun () -> t)})
+                Objects = runtimes |> getObjects
+                GCRoots = runtimes |> getRootObjects
+                FinalizableQueue = runtimes |> getFinalizableQueue
+                Threads = runtimes |> getThreads }
 
-        let runtime =
-          { Types = runtimes |> Seq.collect (fun x->x.GetHeap().EnumerateTypes()) |> Seq.map (fun t-> { Name = t.Name; Type = (fun () -> t)})
-            Objects = runtimes |> getObjects
-            GCRoots = runtimes |> getRootObjects
-            FinalizableQueue = runtimes |> getFinalizableQueue
-            Threads = runtimes |> getThreads }
+            { new IDisposable with member __.Dispose() = target.Dispose() }, runtime 
 
-        { new IDisposable with member __.Dispose() = target.Dispose() }, runtime 
+    let openDumpFile (path: string) = DataTarget.LoadCrashDump(path, CrashDumpReader.DbgEng) |> getRuntime
 
-let d, runtime = MiniWinDbg.openDumpFile @"C:\tmp\example.dmp"
+    let attach pid = DataTarget.AttachToProcess(pid, 30000u, AttachFlag.Invasive) |> getRuntime
 
+
+let d, runtime = MiniWinDbg.openDumpFile @"C:\tmp\example-medium.dmp"
+
+let types = runtime.Objects |> Seq.map (fun x->x.Type.Name, x) |> Map.ofSeq
+(*
 open System.Diagnostics
 
 let objects = runtime.Objects |> Array.ofSeq
@@ -284,10 +290,12 @@ runtime.GCRoots |> Seq.toArray
     * JIT information
     * Dead-lock detection
     * BlockingObjects
+    * exceptions
     * etc
 *)
 
 let p =objects |> Array.filter (fun x->x.Type.Name.StartsWith "System.String[]") |> Array.head
 
 
-let t = runtime.Threads |> Array.ofSeq
+
+let t = runtime.Threads |> Array.ofSeq*)
