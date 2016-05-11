@@ -254,7 +254,13 @@ module MiniWinDbg =
                             | _ -> ""
                         | _ -> ""
 
-                    { ThreadObj = threadObj; LockCount = t.LockCount; Name = name; ManagedThreadId = t.ManagedThreadId; Stack = []; Id = t.OSThreadId; Flags = getThreadFlag t})
+                    { ThreadObj = threadObj
+                      LockCount = t.LockCount
+                      Name = name
+                      ManagedThreadId = t.ManagedThreadId
+                      Stack =  [ for frame in t.StackTrace -> frame.DisplayString ]
+                      Id = t.OSThreadId
+                      Flags = getThreadFlag t})
             runtimes |> Seq.collect getThreads
 
         let getRuntime (target:DataTarget) = 
