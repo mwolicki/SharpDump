@@ -127,7 +127,7 @@ module MiniWinDbg =
     type Runtime = {
         Types : Type seq
         Objects : Val seq
-        ObjectsByName : TypeName -> Val seq
+        ObjectsByTypeName : TypeName -> Val seq
         GCRoots: Val seq
         ///Objects which have been collected, but are awaiting for Finalizer
         FinalizableQueue : Val seq
@@ -271,7 +271,7 @@ module MiniWinDbg =
             let runtime =
               { Types = runtimes |> Seq.collect (fun x->x.GetHeap().EnumerateTypes()) |> Seq.map (fun t -> Type(t, getFieldsCached))
                 Objects = runtimes |> getObjects
-                ObjectsByName = runtimes |> getObjectsByName
+                ObjectsByTypeName = runtimes |> getObjectsByName
                 GCRoots = runtimes |> getRootObjects
                 FinalizableQueue = runtimes |> getFinalizableQueue
                 Threads = runtimes |> getThreads }
