@@ -236,14 +236,16 @@ module MiniWinDbg =
             |||| (t.IsUserSuspended, ThreadFlag.UserSuspended)
 
         let getThreads (runtimes : ClrRuntime array) =
+            let threadsObjs = lazy( 
+                getObjectsByName runtimes "System.Threading.Thread"
+                |> Seq.choose (function Obj o -> Some o | _ -> None)
+                |> Seq.map (fun x->unbox<int> x.Fields.["m_ManagedThreadId"].Value.Val, x)
+                |> Map.ofSeq)
 
             let getThreads (runtime: ClrRuntime) =
                 runtime.Threads 
                 |> Seq.map (fun t-> 
-                    let threadObj = 
-                        match getObject (runtime.GetHeap()) t.Address with
-                        | Obj o -> Some o
-                        | _ -> None
+                    let threadObj =  threadsObjs.Value.TryFind t.ManagedThreadId
                     let name = 
                         match threadObj with 
                         | Some o ->
