@@ -12,7 +12,7 @@ module MiniWinDbg =
     type Type =
         struct
             val ClrType : ClrType
-            val private _fields : ClrType -> ObjectRef -> Map<string, unit -> Val>
+            val private _fields : ClrType -> ObjectRef -> Map<string, Lazy<Val>>
             member t.Fields = t._fields t.ClrType
             member t.Name : TypeName = t.ClrType.Name
             override t.ToString() = t.Name
@@ -139,7 +139,7 @@ module MiniWinDbg =
         let rec getFields (t:ClrType) (addr:uint64) = 
             t.Fields 
             |> Seq.map (fun x->x.Name, 
-                               fun () -> match x.ElementType with
+                               lazy(match x.ElementType with
                                          | ClrElementType.Int64
                                          | ClrElementType.Boolean
                                          | ClrElementType.Char
@@ -162,7 +162,7 @@ module MiniWinDbg =
                                          | ClrElementType.Object ->
                                              x.GetAddress(addr, t.IsValueClass)
                                              |> getObject t.Heap
-                                         | t -> sprintf "Unsupported type %O" t |> failwith)
+                                         | t -> sprintf "Unsupported type %O" t |> failwith))
             |> Map.ofSeq
         and getFieldsCached = 
             () //force cache
@@ -239,7 +239,7 @@ module MiniWinDbg =
             let threadsObjs = lazy( 
                 getObjectsByName runtimes "System.Threading.Thread"
                 |> Seq.choose (function Obj o -> Some o | _ -> None)
-                |> Seq.map (fun x->unbox<int> (x.Fields.["m_ManagedThreadId"]()).Val, x)
+                |> Seq.map (fun x->unbox<int> x.Fields.["m_ManagedThreadId"].Value.Val, x)
                 |> Map.ofSeq)
 
             let getThreads (runtime: ClrRuntime) =
@@ -249,7 +249,7 @@ module MiniWinDbg =
                     let name = 
                         match threadObj with 
                         | Some o ->
-                            match o.Fields.["m_Name"]()  with
+                            match o.Fields.["m_Name"].Value with
                             | Str s -> s
                             | _ -> ""
                         | _ -> ""
@@ -306,7 +306,7 @@ let objects = runtime.Objects |> Array.ofSeq
 objects |> Array.filter (fun x->x.Type.Name = "example.classA") |> Array.length = 10 |> Debug.Assert
 objects |> Array.filter (fun x->x.Type.Name = "example.classA[]") |> Array.length = 1 |> Debug.Assert
 
-let classA = objects |> Array.filter (fun x->x.Type.Name = "example.classA") |> Array.head
+let classA = runtime.ObjectsByName "example.classA" |> Seq.toArray
 
 classA.Fields.["structA"].Fields.["c"].Fields
 
