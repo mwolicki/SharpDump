@@ -51,8 +51,8 @@ module MiniWinDbg =
                 let id = o.Id
                 let getObject = o._getObject
                 seq { for i = 0 to len do
-                        yield t.GetArrayElementAddress(id, i) |> getObject t.Heap }
-            val private _getObject : ClrHeap -> ObjectRef -> Val
+                        yield t.GetArrayElementAddress(id, i) |> getObject t.ComponentType }
+            val private _getObject : ClrType -> ObjectRef -> Val
             override o.ToString() = sprintf "{ Elements = %A; Type = %s; Size = %i}" o.Elements o.Type.Name o.Length
 
             new (id, getObject, type') = {Id = id; _getObject = getObject; Type = type'}
@@ -79,15 +79,15 @@ module MiniWinDbg =
             | SimpleVal o -> o
             | Str s -> box s
             | Obj _ | Struct _ | Array _ | Null -> obj()
-            (*
-        member self.Type =
+         
+        member self.TypeName =
             match self with
-            | Str o -> Type(ClrType(), fun _ -> Map.empty)
-            | SimpleVal o -> Type()
-            | Obj o -> o.Type
-            | Null -> Type()
-            | Struct s -> s.Type
-            | Array (_, t, _) -> t*)
+            | Str o -> typeof<string>.FullName
+            | SimpleVal o -> o.GetType().FullName
+            | Obj o -> o.Type.Name
+            | Null -> System.String.Empty
+            | Struct s -> s.Type.Name
+            | Array arr -> arr.Type.Name
 
     [<Flags>]
     type ThreadFlag =
@@ -161,7 +161,7 @@ module MiniWinDbg =
                                          | ClrElementType.SZArray
                                          | ClrElementType.Object ->
                                              x.GetAddress(addr, t.IsValueClass)
-                                             |> getObject t.Heap
+                                             |> getObject (t.Heap.GetObjectType addr)
                                          | t -> sprintf "Unsupported type %O" t |> failwith))
             |> Map.ofSeq
         and getFieldsCached = 
@@ -169,43 +169,37 @@ module MiniWinDbg =
             getFields
         and getValueType t size addr =
             ValueType(addr, Type(t, getFieldsCached), size)
-        and getObject (heap:ClrHeap) addr : Val =
-                let t = heap.GetObjectType addr
+        and getObject (t:ClrType) addr : Val =
+
                 if t = null then Null 
-                else
-                    if t.IsString then
-                        t.GetValue addr :?> string |> Str
-                    elif t.IsArray then
-                        Arr (addr, getObjectCached, Type (t, getFieldsCached)) |> Array
-                    else
-                        let refersObjs () = 
-                            let a = ResizeArray()
-                            let iter (addr:uint64) _ = getObject heap addr |> a.Add
-                            t.EnumerateRefsOfObjectCarefully (addr, Action<uint64, int>(iter))
-                            a.ToArray()
-                        Object(addr, Type(t, getFieldsCached)) |> Obj
+                elif t.IsString then
+                    t.GetValue addr :?> string |> Str
+                elif t.IsArray then
+                    Arr (addr, getObjectCached, Type (t, getFieldsCached)) |> Array
+                else 
+                    Object(addr, Type(t, getFieldsCached)) |> Obj
         and getObjectCached =
             ()
-            fun (heap:ClrHeap) (addr:ObjectRef)-> getObject heap addr
+            fun (t:ClrType) (addr:ObjectRef)-> getObject t addr
         let getObjects (runtimes : ClrRuntime array) = 
             runtimes |> Seq.collect (fun x-> let heap = x.GetHeap()
-                                             heap.EnumerateObjectAddresses() |> Seq.map (getObject heap))
+                                             heap.EnumerateObjectAddresses() |> Seq.map (fun addr-> getObject (heap.GetObjectType addr) addr))
         let getObjectsByName (runtimes : ClrRuntime array) name = 
             runtimes |> Seq.collect (fun x-> let heap = x.GetHeap()
                                              heap.EnumerateObjectAddresses()
                                              |> Seq.filter (fun ref -> (heap.GetObjectType ref).Name = name)
-                                             |> Seq.map (getObject heap))
+                                             |> Seq.map (fun addr -> getObject (heap.GetObjectType addr) addr))
 
         let getRootObjects (runtimes : ClrRuntime array)  =
             let getRootObjects (heap:ClrHeap) =
                 heap.EnumerateRoots() 
-                |> Seq.map (fun root -> getObject heap root.Object)
+                |> Seq.map (fun root -> getObject (heap.GetObjectType root.Object)  root.Object)
             runtimes |> Seq.collect (fun x -> getRootObjects (x.GetHeap()))
 
         let getFinalizableQueue (runtimes : ClrRuntime array) =
             let getFinalizableQueue (heap:ClrHeap) =
                 heap.EnumerateFinalizableObjectAddresses() 
-                |> Seq.map (getObject heap)
+                |> Seq.map (fun addr -> getObject (heap.GetObjectType addr) addr)
             runtimes |> Seq.collect (fun x -> getFinalizableQueue (x.GetHeap()))
 
         let getThreadFlag (t: ClrThread) =
@@ -244,8 +238,8 @@ module MiniWinDbg =
 
             let getThreads (runtime: ClrRuntime) =
                 runtime.Threads 
-                |> Seq.map (fun t-> 
-                    let threadObj =  threadsObjs.Value.TryFind t.ManagedThreadId
+                |> Seq.map (fun clrType-> 
+                    let threadObj =  threadsObjs.Value.TryFind clrType.ManagedThreadId
                     let name = 
                         match threadObj with 
                         | Some o ->
@@ -255,12 +249,12 @@ module MiniWinDbg =
                         | _ -> ""
 
                     { ThreadObj = threadObj
-                      LockCount = t.LockCount
+                      LockCount = clrType.LockCount
                       Name = name
-                      ManagedThreadId = t.ManagedThreadId
-                      Stack =  [ for frame in t.StackTrace -> frame.DisplayString ]
-                      Id = t.OSThreadId
-                      Flags = getThreadFlag t})
+                      ManagedThreadId = clrType.ManagedThreadId
+                      Stack =  [ for frame in clrType.StackTrace -> frame.DisplayString ]
+                      Id = clrType.OSThreadId
+                      Flags = getThreadFlag clrType})
             runtimes |> Seq.collect getThreads
 
         let getRuntime (target:DataTarget) = 
@@ -302,7 +296,15 @@ module Seq =
 let d, runtime = MiniWinDbg.openDumpFile @"C:\tmp\example-medium.dmp"
 
 
-let types = runtime.Threads |> Seq.toArray
+let t = runtime.ObjectsByTypeName "example.classA[]" |> Seq.toArray
+
+let types = runtime.Objects |> Seq.groupBy(fun p->p.TypeName) |> Map.ofSeq
+
+let p = (types.TryFind "example.classA[]").Value |> Seq.head
+
+let (MiniWinDbg.Array pp ) = p
+
+pp.Elements
 
 (*
 open System.Diagnostics
