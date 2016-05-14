@@ -136,7 +136,7 @@ module MiniWinDbg =
 
     [<AutoOpen>]
     module private MiniWinDbg =
-        let (|IsStruct|IsString|IsSimpleVal|IsObject|) =
+        let (|IsStruct|IsString|IsSimpleVal|IsObject|IsArray|) =
             function
              | ClrElementType.Int64
              | ClrElementType.Boolean
@@ -155,7 +155,7 @@ module MiniWinDbg =
              | ClrElementType.NativeUInt -> IsSimpleVal
              | ClrElementType.Struct -> IsStruct
              | ClrElementType.String -> IsString
-             | ClrElementType.SZArray
+             | ClrElementType.SZArray -> IsArray
              | ClrElementType.Object -> IsObject
              | t -> sprintf "Unsupported type %O" t |> failwith
         
@@ -166,6 +166,7 @@ module MiniWinDbg =
                                          | IsSimpleVal -> x.GetValue addr |> SimpleVal
                                          | IsStruct -> getValueType x.Type x.Size addr |> Struct
                                          | IsString-> x.GetValue addr :?> string |> Str
+                                         | IsArray
                                          | IsObject ->
                                              x.GetAddress(addr, t.IsValueClass)
                                              |> getObject (t.Heap.GetObjectType addr)))
@@ -178,12 +179,15 @@ module MiniWinDbg =
         and getObject (t:ClrType) addr : Val =
 
                 if t = null then Null 
-                elif t.IsString then
-                    t.GetValue addr :?> string |> Str
-                elif t.IsArray then
-                    Arr (addr, getObjectCached, Type (t, getFieldsCached)) |> Array
-                else 
-                    Object(addr, Type(t, getFieldsCached)) |> Obj
+                else
+                    match t.ElementType with
+                    | IsSimpleVal -> t.GetValue addr |> SimpleVal
+                    | IsStruct -> getValueType t (int <| t.GetSize addr) addr |> Struct
+                    | IsString-> t.GetValue addr :?> string |> Str
+                    | IsArray ->
+                        Arr (addr, getObjectCached, Type (t, getFieldsCached)) |> Array
+                    | IsObject ->
+                        Object(addr, Type(t, getFieldsCached)) |> Obj
         and getObjectCached =
             ()
             fun (t:ClrType) (addr:ObjectRef)-> getObject t addr
@@ -299,14 +303,12 @@ module Seq =
             | true, s -> s.Add el
         types
 
-let d, runtime = MiniWinDbg.openDumpFile @"C:\tmp\example-medium.dmp"
+let d, runtime = MiniWinDbg.openDumpFile @"C:\tmp\example.dmp"
 
-
-let t = runtime.ObjectsByTypeName "example.classA[]" |> Seq.toArray
 
 let types = runtime.Objects |> Seq.groupBy(fun p->p.TypeName) |> Map.ofSeq
 
-let p = (types.TryFind "example.classA[]").Value |> Seq.head
+let p = (types.TryFind "System.Int32[]").Value |> Seq.head
 
 let (MiniWinDbg.Array pp ) = p
 
