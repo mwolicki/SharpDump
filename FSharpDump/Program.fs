@@ -136,33 +136,39 @@ module MiniWinDbg =
 
     [<AutoOpen>]
     module private MiniWinDbg =
+        let (|IsStruct|IsString|IsSimpleVal|IsObject|) =
+            function
+             | ClrElementType.Int64
+             | ClrElementType.Boolean
+             | ClrElementType.Char
+             | ClrElementType.Double
+             | ClrElementType.Float
+             | ClrElementType.Int16
+             | ClrElementType.Int32
+             | ClrElementType.Int8
+             | ClrElementType.UInt16
+             | ClrElementType.UInt32
+             | ClrElementType.UInt64
+             | ClrElementType.UInt8 
+             | ClrElementType.NativeInt
+             | ClrElementType.Pointer
+             | ClrElementType.NativeUInt -> IsSimpleVal
+             | ClrElementType.Struct -> IsStruct
+             | ClrElementType.String -> IsString
+             | ClrElementType.SZArray
+             | ClrElementType.Object -> IsObject
+             | t -> sprintf "Unsupported type %O" t |> failwith
+        
         let rec getFields (t:ClrType) (addr:uint64) = 
             t.Fields 
             |> Seq.map (fun x->x.Name, 
                                lazy(match x.ElementType with
-                                         | ClrElementType.Int64
-                                         | ClrElementType.Boolean
-                                         | ClrElementType.Char
-                                         | ClrElementType.Double
-                                         | ClrElementType.Float
-                                         | ClrElementType.Int16
-                                         | ClrElementType.Int32
-                                         | ClrElementType.Int8
-                                         | ClrElementType.UInt16
-                                         | ClrElementType.UInt32
-                                         | ClrElementType.UInt64
-                                         | ClrElementType.UInt8 
-                                         | ClrElementType.NativeInt
-                                         | ClrElementType.Pointer
-                                         | ClrElementType.NativeUInt -> x.GetValue addr |> SimpleVal
-                                         | ClrElementType.Struct ->
-                                             getValueType x.Type x.Size addr |> Struct
-                                         | ClrElementType.String -> x.GetValue addr :?> string |> Str
-                                         | ClrElementType.SZArray
-                                         | ClrElementType.Object ->
+                                         | IsSimpleVal -> x.GetValue addr |> SimpleVal
+                                         | IsStruct -> getValueType x.Type x.Size addr |> Struct
+                                         | IsString-> x.GetValue addr :?> string |> Str
+                                         | IsObject ->
                                              x.GetAddress(addr, t.IsValueClass)
-                                             |> getObject (t.Heap.GetObjectType addr)
-                                         | t -> sprintf "Unsupported type %O" t |> failwith))
+                                             |> getObject (t.Heap.GetObjectType addr)))
             |> Map.ofSeq
         and getFieldsCached = 
             () //force cache
