@@ -285,6 +285,20 @@ module private MiniWinDbg =
                         |> Async.RunSynchronously
                         |> Array.map(fun (dac, x)-> x.CreateRuntime dac) 
 
+        let heapIndex = lazy(
+            let dict = System.Collections.Generic.Dictionary()
+            for heap in runtimes |> Seq.map (fun x->x.GetHeap()) do
+                for objRef in heap.EnumerateObjectAddresses() do
+                    let clrType = heap.GetObjectType objRef
+                    clrType.EnumerateRefsOfObjectCarefully 
+                        (objRef, ((fun ref _->
+                                    match dict.TryGetValue ref with
+                                    | false, _ -> 
+                                        let set = System.Collections.Generic.HashSet()
+                                        set.Add objRef |> ignore
+                                        dict.Add(ref, set)
+                                    | true, set -> set.Add objRef |> ignore)))
+            dict :> System.Collections.Generic.IReadOnlyDictionary<_,_>)
         let runtime =
             { Types = runtimes |> Seq.collect (fun x->x.GetHeap().EnumerateTypes()) |> Seq.map (fun t -> Type t)
               Objects = runtimes |> getObjects

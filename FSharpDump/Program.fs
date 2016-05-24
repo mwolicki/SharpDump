@@ -15,49 +15,11 @@ module Seq =
             | true, s -> s.Add el
         types
 
-let d, runtime = FSharpDump.openDumpFile @"C:\tmp\example.dmp"
+let d, runtime = FSharpDump.openDumpFile @"C:\tmp\example-medium.dmp"
 
 
 runtime.Objects |> Seq.skip 10 |> Seq.head
 
-let types = runtime.Objects |> Seq.groupBy(fun p->p.TypeName) |> Map.ofSeq
+let types = runtime.Objects |> Seq.toDict (fun x->x.TypeName)
 
-let p = (types.TryFind "example.classA").Value |> Seq.head
-
-
-p.Type
-p.Elements
-
-(*
-open System.Diagnostics
-
-let objects = runtime.Objects |> Array.ofSeq
-
-objects |> Array.filter (fun x->x.Type.Name = "example.classA") |> Array.length = 10 |> Debug.Assert
-objects |> Array.filter (fun x->x.Type.Name = "example.classA[]") |> Array.length = 1 |> Debug.Assert
-
-let classA = runtime.ObjectsByName "example.classA" |> Seq.toArray
-
-classA.Fields.["structA"].Fields.["c"].Fields
-
-runtime.GCRoots |> Seq.toArray
-(*
-    * Add support for enums
-    * arrays
-    * Cancluate distance between 2 objects
-    * stacks
-    * EnumerateBlockingObjects
-    * Delegates on stack
-    * JIT information
-    * Dead-lock detection
-    * BlockingObjects
-    * exceptions
-    * etc
-*)
-
-let p =objects |> Array.filter (fun x->x.Type.Name.StartsWith "System.String[]") |> Array.head
-
-
-
-let t = runtime.Threads |> Array.ofSeq*)
-
+let p = types.["example.classA"] |> Seq.head
