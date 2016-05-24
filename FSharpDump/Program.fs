@@ -17,15 +17,15 @@ module Seq =
 
 let d, runtime = FSharpDump.openDumpFile @"C:\tmp\example.dmp"
 
+
 runtime.Objects |> Seq.skip 10 |> Seq.head
 
 let types = runtime.Objects |> Seq.groupBy(fun p->p.TypeName) |> Map.ofSeq
 
 let p = (types.TryFind "System.Int32[]").Value |> Seq.head
 
-let (FSharpDump.Array pp ) = p
 
-pp.Elements
+p.Elements
 
 (*
 open System.Diagnostics
