@@ -109,7 +109,7 @@ and Val =
          
     member self.TypeName =
         match self with
-        | Str o -> typeof<string>.FullName
+        | Str _ -> typeof<string>.FullName
         | SimpleVal o -> o.GetType().FullName
         | Obj o -> o.Type.Name
         | Null -> System.String.Empty
@@ -148,10 +148,8 @@ and
                 | IsSimpleVal -> t.GetValue addr |> SimpleVal
                 | IsStruct -> Tools.getValueType t (int <| t.GetSize addr) addr |> Struct
                 | IsString-> t.GetValue addr :?> string |> Str
-                | IsArray ->
-                    Arr (addr, Type t) |> Array
-                | IsObject ->
-                    Object(addr, Type t) |> Obj
+                | IsArray -> Arr (addr, Type t) |> Array
+                | IsObject -> Object(addr, Type t) |> Obj
 
 [<Flags>]
 type ThreadFlag =
@@ -201,7 +199,6 @@ type Runtime = {
 [<AutoOpen>]
 module private MiniWinDbg =
 
-        
     let getObjects (runtimes : ClrRuntime array) = 
         runtimes |> Seq.collect (fun x-> let heap = x.GetHeap()
                                          heap.EnumerateObjectAddresses() |> Seq.map (fun addr-> Tools.getObject (heap.GetObjectType addr) addr))
@@ -257,8 +254,8 @@ module private MiniWinDbg =
 
         let getThreads (runtime: ClrRuntime) =
             runtime.Threads 
-            |> Seq.map (fun clrType-> 
-                let threadObj =  threadsObjs.Value.TryFind clrType.ManagedThreadId
+            |> Seq.map (fun clrThread-> 
+                let threadObj =  threadsObjs.Value.TryFind clrThread.ManagedThreadId
 
                 let name = 
                     match threadObj with 
@@ -269,12 +266,12 @@ module private MiniWinDbg =
                     | _ -> ""
 
                 { ThreadObj = threadObj
-                  LockCount = clrType.LockCount
+                  LockCount = clrThread.LockCount
                   Name = name
-                  ManagedThreadId = clrType.ManagedThreadId
-                  Stack =  [ for frame in clrType.StackTrace -> frame.DisplayString ]
-                  Id = clrType.OSThreadId
-                  Flags = getThreadFlag clrType})
+                  ManagedThreadId = clrThread.ManagedThreadId
+                  Stack =  [ for frame in clrThread.StackTrace -> frame.DisplayString ]
+                  Id = clrThread.OSThreadId
+                  Flags = getThreadFlag clrThread})
         runtimes |> Seq.collect getThreads
 
     let getRuntime (target:DataTarget) = 
