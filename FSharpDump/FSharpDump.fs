@@ -33,6 +33,11 @@ type Type =
     struct
         val ClrType : ClrType
         member t.Fields = Tools.getFields t.ClrType
+        member t.StaticFields =
+            let t = t
+            seq { for staticField in t.ClrType.StaticFields do
+                    for appDomain in t.ClrType.Heap.Runtime.AppDomains do
+                        yield appDomain.Name, staticField.GetAddress appDomain |> Tools.getObject staticField.Type }
         member t.Name : TypeName = t.ClrType.Name
         override t.ToString() = t.Name
         new (clrType) = { ClrType = clrType }
@@ -110,6 +115,16 @@ and Val =
         | Null -> System.String.Empty
         | Struct s -> s.Type.Name
         | Array arr -> arr.Type.Name
+
+
+    member self.Type =
+        match self with
+        | Str _
+        | Null
+        | SimpleVal _ -> None
+        | Obj o ->Some o.Type
+        | Struct s -> Some s.Type
+        | Array arr -> Some arr.Type
 and
     [<AbstractClass; Sealed>] private Tools private () =
     static member getFields (t:ClrType) (addr:uint64) = 

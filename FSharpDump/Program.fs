@@ -22,9 +22,10 @@ runtime.Objects |> Seq.skip 10 |> Seq.head
 
 let types = runtime.Objects |> Seq.groupBy(fun p->p.TypeName) |> Map.ofSeq
 
-let p = (types.TryFind "System.Int32[]").Value |> Seq.head
+let p = (types.TryFind "example.classA").Value |> Seq.head
 
 
+p.Type
 p.Elements
 
 (*
