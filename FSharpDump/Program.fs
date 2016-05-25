@@ -18,7 +18,9 @@ module Seq =
 let d, runtime = FSharpDump.openDumpFile @"C:\tmp\example-medium.dmp"
 
 
-runtime.Objects |> Seq.skip 10 |> Seq.head
+let t = runtime.Objects |> Seq.skip 10 |> Seq.head
+
+let x = t.RefersToMe |> Seq.toArray
 
 let types = runtime.Objects |> Seq.toDict (fun x->x.TypeName)
 

@@ -48,7 +48,15 @@ and Object =
         val Type : Type
         member o.Size = o.Type.ClrType.GetSize o.Id
         member o.Fields with get () = o.Type.Fields o.Id
-
+        member o.RefersToMe = 
+            let myObjId = o.Id
+            let heap =  o.Type.ClrType.Heap
+            seq { for objRef in heap.EnumerateObjectAddresses() do
+                    let clrType = heap.GetObjectType objRef
+                    let mutable refersToMe = false
+                    clrType.EnumerateRefsOfObjectCarefully (objRef, (fun ref _ -> if ref = myObjId then refersToMe <- true))
+                    if refersToMe then
+                        yield Tools.getObject clrType objRef }
         override o.ToString() = sprintf "{ Id = %i; Type = %s}" o.Id o.Type.Name
 
         new (id, type') = {Id = id; Type = type'}
@@ -115,6 +123,11 @@ and Val =
         | Null -> System.String.Empty
         | Struct s -> s.Type.Name
         | Array arr -> arr.Type.Name
+
+    member self.RefersToMe =
+        match self with
+        | Obj o -> o.RefersToMe
+        | _ -> Seq.empty
 
 
     member self.Type =
@@ -193,7 +206,8 @@ type Runtime = {
     GCRoots: Val seq
     ///Objects which have been collected, but are awaiting for Finalizer
     FinalizableQueue : Val seq
-    Threads : Thread seq }
+    Threads : Thread seq
+    HeapIndex : System.Lazy<System.Collections.Generic.IReadOnlyDictionary<uint64, ResizeArray<uint64>>> }
 
 
 [<AutoOpen>]
@@ -291,13 +305,13 @@ module private MiniWinDbg =
                 for objRef in heap.EnumerateObjectAddresses() do
                     let clrType = heap.GetObjectType objRef
                     clrType.EnumerateRefsOfObjectCarefully 
-                        (objRef, ((fun ref _->
+                        (objRef, (fun ref _->
                                     match dict.TryGetValue ref with
                                     | false, _ -> 
-                                        let set = System.Collections.Generic.HashSet()
+                                        let set = ResizeArray()
                                         set.Add objRef |> ignore
                                         dict.Add(ref, set)
-                                    | true, set -> set.Add objRef |> ignore)))
+                                    | true, set -> set.Add objRef))
             dict :> System.Collections.Generic.IReadOnlyDictionary<_,_>)
         let runtime =
             { Types = runtimes |> Seq.collect (fun x->x.GetHeap().EnumerateTypes()) |> Seq.map (fun t -> Type t)
@@ -305,7 +319,8 @@ module private MiniWinDbg =
               ObjectsByTypeName = runtimes |> getObjectsByName
               GCRoots = runtimes |> getRootObjects
               FinalizableQueue = runtimes |> getFinalizableQueue
-              Threads = runtimes |> getThreads }
+              Threads = runtimes |> getThreads
+              HeapIndex = heapIndex }
 
         { new IDisposable with member __.Dispose() = target.Dispose() }, runtime 
 
